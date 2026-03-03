@@ -63,12 +63,12 @@ workflows:
   test-deploy:
     jobs:
       - test:
-          context: dev
+          context: SonarCloud
           filters:
             tags:
               only: /^v.*/
       - deploy:
-          context: dev
+          context: SonarCloud
           requires:
             - test
           filters:
