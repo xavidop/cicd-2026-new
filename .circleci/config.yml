@@ -1,62 +1,78 @@
 version: 2.1
 
-executors:
-  node:
-    docker:
-      - image: cimg/node:17.2.0 # the primary container, where your job's commands are run
+defaults: &defaults
+  working_directory: ~/repo
+  docker:
+    - image: cimg/node:20.5.1
 
-orbs:
-  hello-orb: xavidop/circleci-orb-hello-world@0.0.1
-
-commands:
-  # A command named `echo` that runs the `echo` command
-  echo:
-    parameters:
-      message:
-        type: string
-        default: "hello world"
-    steps:
-      - run: echo << parameters.message >>
+# orbs:
+#   sonarcloud: sonarsource/sonarcloud@2.0.0
 
 jobs:
-  hello-job:
-    executor: node # use the `node` executor defined above
+  test:
+    <<: *defaults
     steps:
-      - checkout # check out the code in the project directory
-      - echo # run the `echo` command
-
-  hello-job-setter:
-    executor: node # use the `node` executor defined above
-    steps:
-      - run: echo "hello world" > hello.txt
-      # Persist the specified paths (workspace/echo-output) into the workspace for use in downstream job.
-      - persist_to_workspace:
-          # Must be an absolute path, or relative path from working_directory. This is a directory on the container which is
-          # taken to be the root directory of the workspace.
-          root: .
-          # Must be relative path from root
+      - checkout
+      - restore_cache:
+          keys:
+          - v1-dependencies-{{ checksum "package.json" }}
+          # fallback to using the latest cache if no exact match is found
+          - v1-dependencies-
+      - run: npm install
+      - run:
+          name: Run lint
+          command: npm run lint:report
+      - run:
+          name: Run tests
+          command: npm run test:coverage
+      # - sonarcloud/scan
+      - save_cache:
           paths:
-            - ./
-
-  hello-job-getter:
-    executor: node # use the `node` executor defined above
+            - node_modules
+          key: v1-dependencies-{{ checksum "package.json" }}
+      - store_test_results:
+          path: test-results.xml
+      - persist_to_workspace:
+          root: ~/repo
+          paths: .
+  deploy:
+    <<: *defaults
     steps:
       - attach_workspace:
-          # Must be absolute path or relative path from working_directory
-          at: .
-      - run: |
-          if [[ `cat hello.txt` == "hello world" ]]; then
-            echo "It worked!";
-          else
-            echo "Nope!"; exit 1
-          fi
-
+          at: ~/repo
+      - run:
+          name: Authenticate with registry
+          command: echo "//registry.npmjs.org/:_authToken=$npm_TOKEN" > ~/repo/.npmrc
+      - run:
+          name: Pack package
+          command: npm pack
+      - run:
+          name: Publish package
+          command: npm publish --dry run
+      - store_artifacts:
+          path: ~/repo/my-awesome-package-1.1.0.tgz
+          destination: package/release.tgz
+      - store_artifacts:
+          path: ~/repo/dist
+          destination: dist
+      - store_artifacts:
+          path: ~/repo/docs
+          destination: docs
+            
 workflows:
-  my-workflow:
+  test-deploy:
     jobs:
-      - hello-job
-      - hello-orb/hello
-      - hello-job-setter
-      - hello-job-getter:
+      - test:
+          context: dev
+          filters:
+            tags:
+              only: /^v.*/
+      - deploy:
+          context: dev
           requires:
-            - hello-job-setter
+            - test
+          filters:
+            tags:
+              only: /^v.*/
+            branches:
+              ignore: /.*/
